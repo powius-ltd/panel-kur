@@ -8,6 +8,8 @@
 # (src/lib/setup/update/github.ts ile ayni kural). Anahtar hicbir ciktiya, gunluge, komut satirina ya da adrese yazilmaz.
 # Akis: kodu coz -> son surumu oku -> zip + SHA256SUMS indir -> ozeti dogrula -> yalniz paketin kendi dosyalarini ~/panel'e koy -> Kur.
 # PANEL_KUR_KURU=1: yalniz plani yazar; hicbir sey indirmez / yazmaz. PANEL_KUR_DEPO=owner/ad: yalniz test icin depo adi.
+# PANEL_KUR_YENIDEN=1: ~/panel varsa (.env.local olsun olmasin) onarim yerine YENI paket kurulur; dogrulamadan sonra eski klasor ~/panel-eski-<tarih>'e
+# tasinir (ASLA silinmez), eski .env.local (varsa) yeni kuruluma kopyalanir; klasor yoksa bayrak etkisiz.
 # Govde fonksiyonlarda, son satir main: yarim inen betik calismaz. macOS bash 3.2 uyumlu (ilişkisel dizi ve mapfile yok).
 
 DEPO_SAHIBI="powius-ltd"
@@ -136,6 +138,14 @@ paket_kopyala() {
   done < <(cat "$kok/$OSDIR/paket-kok.txt"; printf '\npanel-recete.json\nkanal.env\n')
 }
 
+# Eski kurulumun yeni adi: ~/panel-eski-<YYYYAAGG-SSDD>; doluysa sonuna -2, -3 ...
+eski_adi() {
+  local base="$HOME/panel-eski-$(date +%Y%m%d-%H%M)" ad n=2
+  ad=$base
+  while [ -e "$ad" ]; do ad="$base-$n"; n=$((n + 1)); done
+  printf '%s' "$ad"
+}
+
 kur_calistir() {
   unset PANEL_KOD TOKEN
   if [ "$TTY_VAR" = 1 ]; then
@@ -174,8 +184,12 @@ main() {
   TTY_VAR=0
   if ( : </dev/tty ) 2>/dev/null && [ -z "${PANEL_KUR_SESSIZ:-}" ]; then TTY_VAR=1; fi
 
+  # PANEL_KUR_YENIDEN=1 ve $HEDEF klasoru var (.env.local olsun olmasin): onarim dalina girilmez, yeni paket indirilip eskinin yerine kurulur (eski yedeklenir).
+  local yeniden=0
+  if [ "${PANEL_KUR_YENIDEN:-}" = 1 ] && [ -d "$HEDEF" ]; then yeniden=1; fi
+
   # Kurulu panel ezilmez: .env.local varsa paket inmez, mevcut Kur calisir (onarim).
-  if [ -f "$HEDEF/.env.local" ]; then
+  if [ -f "$HEDEF/.env.local" ] && [ "$yeniden" != 1 ]; then
     if [ "${PANEL_KUR_KURU:-}" = 1 ]; then
       say "KURU KOŞU: panel zaten kurulu ($HEDEF). Paket indirilmez; mevcut Kur çalıştırılır (onarım)."
       say 'Hiçbir şey indirilmedi, hiçbir dosya yazılmadı.'
@@ -191,6 +205,7 @@ main() {
     say "  1. Kod çözüldü (kanal: $kn). Paket deposu: $DEPO"
     say "  2. Son sürüm okunur, panel-*.zip + SHA256SUMS indirilir (anahtar yalnız $API_HOST'a gider)."
     say '  3. Özet (SHA-256) doğrulanır; uyuşmazsa hiçbir şey kurulmaz.'
+    if [ "$yeniden" = 1 ]; then say "  3b. Eski kurulum ($HEDEF) $HOME/panel-eski-<tarih> klasörüne taşınır (silinmez); eski .env.local yeni kuruluma kopyalanır."; fi
     say "  4. Yalnız paketin kendi dosyaları $HEDEF klasörüne konur."
     say "  5. $KUR çalıştırılır$([ "$TTY_VAR" = 1 ] || printf ' (etkileşimsiz: sessiz)')."
     return 0
@@ -238,7 +253,16 @@ main() {
   paket_ac "$TMP/$zipad" "$TMP/ac" || dur 'Paket açılamadı.'
   local kok
   kok=$(paket_kok_bul "$TMP/ac") || dur 'Paket beklenen biçimde değil; kurulmadı. Kuran ekibe haber ver.'
+  local eski=""
+  if [ "$yeniden" = 1 ]; then
+    eski=$(eski_adi)
+    mv "$HEDEF" "$eski" || dur "Eski kurulum taşınamadı; hiçbir şey değişmedi. Eski kurulum $HEDEF klasöründe duruyor."
+  fi
   paket_kopyala "$kok"
+  if [ -n "$eski" ] && [ -f "$eski/.env.local" ]; then
+    cp -p "$eski/.env.local" "$HEDEF/.env.local" || dur "Anahtarlar yeni kuruluma kopyalanamadı. Eski kurulum $eski klasöründe duruyor (silme); kuran ekibe haber ver."
+    say "Eski kurulum $eski klasörüne alındı; anahtarların yeni kuruluma taşındı."
+  fi
   temizle
   trap - EXIT INT TERM HUP
   say "Panel dosyaları $HEDEF klasörüne konuldu. Kurulum başlıyor..."

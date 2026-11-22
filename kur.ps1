@@ -6,6 +6,8 @@
 # istek anahtarsizdir (src/lib/setup/update/github.ts ile ayni kural). Anahtar hicbir ciktiya, gunluge ya da adrese yazilmaz.
 # Akis: kodu coz -> son surumu oku -> zip + SHA256SUMS indir -> ozeti dogrula -> yalniz paketin kendi dosyalarini C:\panel'e koy -> Kur.cmd.
 # PANEL_KUR_KURU=1: yalniz plani yazar; hicbir sey indirmez / yazmaz. PANEL_KUR_DEPO=owner/ad: yalniz test icin depo adi.
+# PANEL_KUR_YENIDEN=1: C:\panel varsa (.env.local olsun olmasin) onarim yerine YENI paket kurulur; dogrulamadan sonra eski klasor C:\panel-eski-<tarih>'e
+# tasinir (ASLA silinmez), eski .env.local yeni kuruluma kopyalanir.
 # "iex" ile calistigi icin `exit` YOK (musterinin penceresini kapatir): hatada `throw`. Govde fonksiyonda, son satirda cagrilir.
 # Dosya yalniz ASCII (irm 5.1'de kod sayfasini yanlis okuyabilir): Turkce metinler aksansiz.
 
@@ -40,9 +42,10 @@ function Invoke-PanelKur {
   try { if ([Console]::IsInputRedirected -or -not [Environment]::UserInteractive) { $sessiz = $true } } catch { $sessiz = $true }
   $kur = Join-Path $hedef 'Kur.cmd'
   $kuru = ($env:PANEL_KUR_KURU -eq '1')
+  $yeniden = (($env:PANEL_KUR_YENIDEN -eq '1') -and (Test-Path -LiteralPath $hedef -PathType Container))
 
   # Kurulu panel ezilmez: .env.local varsa paket inmez, mevcut Kur calisir (onarim).
-  if (Test-Path -LiteralPath (Join-Path $hedef '.env.local')) {
+  if ((Test-Path -LiteralPath (Join-Path $hedef '.env.local')) -and -not $yeniden) {
     if ($kuru) {
       Write-Host "KURU KOSU: panel zaten kurulu ($hedef). Paket indirilmez; mevcut Kur calistirilir (onarim)."
       Write-Host 'Hicbir sey indirilmedi, hicbir dosya yazilmadi.'
@@ -59,6 +62,7 @@ function Invoke-PanelKur {
     Write-Host "  1. Kod cozuldu (kanal: $kn). Paket deposu: $depo"
     Write-Host "  2. Son surum okunur, panel-*.zip + SHA256SUMS indirilir (anahtar yalniz $apiHost adresine gider)."
     Write-Host '  3. Ozet (SHA-256) dogrulanir; uyusmazsa hicbir sey kurulmaz.'
+    if ($yeniden) { Write-Host "  3b. Eski kurulum ($hedef) C:\panel-eski-<tarih> klasorune tasinir (silinmez); eski .env.local yeni kuruluma kopyalanir." }
     Write-Host "  4. Yalniz paketin kendi dosyalari $hedef klasorune konur."
     Write-Host ('  5. Kur.cmd calistirilir' + $(if ($sessiz) { ' (etkilesimsiz: sessiz).' } else { '.' }))
     return
@@ -103,6 +107,15 @@ function Invoke-PanelKur {
     }
     if (-not $kok) { throw 'Paket beklenen biciminde degil; kurulmadi. Kuran ekibe haber ver.' }
 
+    $eski = $null
+    if ($yeniden) {
+      $taban = 'C:\panel-eski-' + (Get-Date -Format 'yyyyMMdd-HHmm')
+      $eski = $taban
+      $n = 2
+      while (Test-Path -LiteralPath $eski) { $eski = "$taban-$n"; $n++ }
+      try { Move-Item -LiteralPath $hedef -Destination $eski -ErrorAction Stop } catch { throw "Eski kurulum tasinamadi (acik bir pencere ya da program kullaniyor olabilir); hicbir sey degismedi. Eski kurulum $hedef klasorunde duruyor." }
+    }
+
     # YALNIZ paketin kendi dosyalari (windows\paket-kok.txt + panel-recete.json + kanal.env) hedefe kopyalanir.
     $names = @(Get-Content -LiteralPath (Join-Path $kok 'windows\paket-kok.txt') | ForEach-Object { $_.Trim() } | Where-Object { $_ -and $_ -notmatch '[\\/:]' }) + @('panel-recete.json', 'kanal.env')
     try { New-Item -ItemType Directory -Force -Path $hedef | Out-Null } catch { throw "$hedef olusturulamadi (izin?). Kuran ekibe haber ver." }
@@ -114,6 +127,10 @@ function Invoke-PanelKur {
       } elseif (Test-Path -LiteralPath $src -PathType Leaf) {
         Copy-Item -LiteralPath $src -Destination (Join-Path $hedef $name) -Force
       }
+    }
+    if ($eski -and (Test-Path -LiteralPath (Join-Path $eski '.env.local'))) {
+      try { Copy-Item -LiteralPath (Join-Path $eski '.env.local') -Destination (Join-Path $hedef '.env.local') -Force -ErrorAction Stop } catch { throw "Anahtarlar yeni kuruluma kopyalanamadi. Eski kurulum $eski klasorunde duruyor (silme); kuran ekibe haber ver." }
+      Write-Host "Eski kurulum $eski klasorune alindi; anahtarlarin yeni kuruluma tasindi."
     }
   } finally {
     Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue
